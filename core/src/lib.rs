@@ -1,8 +1,15 @@
+#[macro_use]
+extern crate lazy_static;
+extern crate regex;
+
+use regex::Regex;
+
 // use std::thread;
 use std::fmt;
 use std::ffi::CStr;
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::sync::mpsc;
+use std::borrow::Cow;
 
 /// Enum corresponding to the tracepoint events we are about
 pub enum Event {
@@ -24,6 +31,86 @@ pub struct Frame {
     local_types: Vec<String>,
     class_name: String
 }
+
+
+impl Frame {
+    pub fn empty() -> Frame {
+        Frame {
+            event: Event::Class,
+            file: "".to_string(),
+            line: 0,
+            method_id: "".to_string(),
+            local_names: vec![],
+            local_types: vec![],
+            class_name: "".to_string(),
+        }
+    }
+
+    pub fn sanitized_class_name(&self) -> Cow<str> {
+        lazy_static! {
+            static ref GENERATED_ID_REGEX: Regex = Regex::new(":0x[\\dA-Fa-f]{16}")
+                .unwrap();
+        }
+        GENERATED_ID_REGEX.replace_all(&self.class_name, "(generated)")
+    }
+
+    pub fn pretty_format_call(&self) -> String {
+        lazy_static! {
+            static ref SINGLETON_CLASS_REGEX: Regex = Regex::new("^#?<Class:([^\\s>]+)")
+                .unwrap();
+        }
+
+        let class_str = self.sanitized_class_name();
+
+        if let Some(caps) = SINGLETON_CLASS_REGEX.captures(&class_str) {
+            let class_name = caps.get(1).unwrap().as_str();
+            format!("{}.{}", class_name, self.method_id)
+        }
+        else {
+            format!("{}#{}", class_str, self.method_id)
+        }
+    }
+}
+
+#[test]
+fn frame_sanitized_class_name() {
+    let mut f = Frame::empty();
+
+    f.class_name = "Regular::Ruby::Class".to_string();
+    assert_eq!(f.sanitized_class_name(), "Regular::Ruby::Class");
+
+    f.class_name = "#<Some::SingletonClass:0xF2F5EAB2B2D35910>".to_string();
+    assert_eq!(f.sanitized_class_name(), "#<Some::SingletonClass(generated)>");
+}
+
+#[test]
+fn frame_pretty_format_call() {
+    let mut f = Frame::empty();
+
+    f.class_name = "Regular::Ruby::Class".to_string();
+    f.method_id = "just_do_it".to_string();
+    assert_eq!(f.pretty_format_call(), "Regular::Ruby::Class#just_do_it");
+
+    f.class_name = "#<Class:Object>".to_string();
+    f.method_id = "compute".to_string();
+    assert_eq!(f.pretty_format_call(), "Object.compute");
+}
+
+
+// pub struct Trace {
+//     frames: Vec<Frame>
+// }
+// 
+// 
+// impl Trace {
+//     pub fn new() -> Trace {
+//         Trace { frames: vec![] }
+//     }
+// 
+//     pub fn push() {
+//     }
+// }
+
 
 /// State we use in the processing thread
 pub struct Backend {

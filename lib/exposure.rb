@@ -12,6 +12,7 @@ module Exposure
     extend FFI::Library
     ffi_lib 'core/target/debug/libexposure.so'
 
+    enum :letters, [:b_call, 1, :class, :call, :return, :b_return, :end]
     attach_function :go_and_test, %i[
       int32
       string
