@@ -1,0 +1,13 @@
+[package]
+name = "exposure_core"
+version = "0.1.0"
+authors = ["Nigel Baillie <metreckk@gmail.com>"]
+edition = "2018"
+
+[lib]
+name = "exposure"
+crate-type = ["dylib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]

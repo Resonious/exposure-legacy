@@ -9,3 +9,7 @@
 
 # rspec failure tracking
 .rspec_status
+
+# Rust files
+core/target/
+core/Cargo.lock
