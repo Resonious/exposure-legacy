@@ -29,7 +29,8 @@ pub struct Frame {
     method_id: String,
     local_names: Vec<String>,
     local_types: Vec<String>,
-    class_name: String
+    class_name: String,
+    receiver: String
 }
 
 
@@ -43,15 +44,16 @@ impl Frame {
             local_names: vec![],
             local_types: vec![],
             class_name: "".to_string(),
+            receiver: "".to_string()
         }
     }
 
-    pub fn sanitized_class_name(&self) -> Cow<str> {
+    pub fn sanitized_class_name(class_name: &str) -> Cow<str> {
         lazy_static! {
             static ref GENERATED_ID_REGEX: Regex = Regex::new(":0x[\\dA-Fa-f]{16}")
                 .unwrap();
         }
-        GENERATED_ID_REGEX.replace_all(&self.class_name, "(generated)")
+        GENERATED_ID_REGEX.replace_all(class_name, "(generated)")
     }
 
     pub fn pretty_format_call(&self) -> String {
@@ -60,7 +62,7 @@ impl Frame {
                 .unwrap();
         }
 
-        let class_str = self.sanitized_class_name();
+        let class_str = Frame::sanitized_class_name(&self.class_name);
 
         if let Some(caps) = SINGLETON_CLASS_REGEX.captures(&class_str) {
             let class_name = caps.get(1).unwrap().as_str();
@@ -70,17 +72,21 @@ impl Frame {
             format!("{}#{}", class_str, self.method_id)
         }
     }
+
+    pub fn pretty_format_class(&self) -> Cow<str> {
+        Frame::sanitized_class_name(&self.receiver)
+    }
 }
 
 #[test]
-fn frame_sanitized_class_name() {
+fn frame_pretty_format_class() {
     let mut f = Frame::empty();
 
-    f.class_name = "Regular::Ruby::Class".to_string();
-    assert_eq!(f.sanitized_class_name(), "Regular::Ruby::Class");
+    f.receiver = "Regular::Ruby::Class".to_string();
+    assert_eq!(f.pretty_format_class(), "Regular::Ruby::Class");
 
-    f.class_name = "#<Some::SingletonClass:0xF2F5EAB2B2D35910>".to_string();
-    assert_eq!(f.sanitized_class_name(), "#<Some::SingletonClass(generated)>");
+    f.receiver = "#<Some::SingletonClass:0xF2F5EAB2B2D35910>".to_string();
+    assert_eq!(f.pretty_format_class(), "#<Some::SingletonClass(generated)>");
 }
 
 #[test]
@@ -185,6 +191,7 @@ fn it_works() {
         local_names: vec![],
         local_types: vec![],
         class_name: "".to_string(),
+        receiver: "".to_string()
     };
 
     assert_eq!(2 + f.event as i32, 5);
