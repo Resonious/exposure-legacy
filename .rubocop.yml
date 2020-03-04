@@ -1,0 +1,12 @@
+Layout/EmptyLines:
+  Enabled: false
+Style/HashEachMethods:
+  Enabled: true
+Style/HashTransformKeys:
+  Enabled: true
+Style/HashTransformValues:
+  Enabled: true
+Layout/EmptyLinesAroundArguments:
+  Enabled: false
+Style/ConditionalAssignment:
+  Enabled: false

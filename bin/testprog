@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+
+require 'bundler/setup'
+require 'exposure'
+Thread.current[:trace] = Exposure::Trace.new
+Thread.current[:trace].start
+
+class Test1
+  def go
+    puts 'going'
+  end
+end
+
+class Test2
+  def self.say_hi(arg = nil)
+    puts 'hi'
+    puts arg
+  end
+
+  def go(&block)
+    block.call
+  end
+
+  say_hi
+end
+
+class Mush < ActiveRecord::Base
+  def self.whatever
+  end
+end
+
+t1 = Test1.new
+t1.go
+
+t2 = Test2.new
+t2.go { t1.go }
+
+puts Mush.table_name
+puts Mush.name
+puts Mush.to_s
+puts Mush.inspect
+
+Test2.say_hi Test2.say_hi Mush.whatever
+
+
+Thread.current[:trace].stop
