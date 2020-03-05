@@ -13,6 +13,10 @@ use std::os::raw::{c_char, c_void};
 use std::boxed::Box;
 use std::borrow::Cow;
 use std::path::Path;
+use std::fs::File;
+use std::fs;
+use std::io::{self, BufRead};
+use std::io::prelude::*;
 
 /// Enum corresponding to the tracepoint events we are about
 pub enum EventType {
@@ -48,7 +52,14 @@ impl Event {
             static ref GENERATED_ID_REGEX: Regex = Regex::new(":0x[\\dA-Fa-f]{16}")
                 .unwrap();
         }
-        GENERATED_ID_REGEX.replace_all(class_name, "(generated)")
+        let result = GENERATED_ID_REGEX.replace_all(class_name, "(generated)");
+        let result_str: &str = &result;
+
+        match result_str {
+            "NilClass"                 => Cow::from("nil"),
+            "FalseClass" | "TrueClass" => Cow::from("bool"),
+            _                          => result
+        }
     }
 
     fn format_bcall(file: &str, line: i32) -> String {
@@ -121,18 +132,111 @@ impl Frame {
 
     /// Registers the local with the given type. If the local is already present,
     /// the given type is added to its list of types.
-    pub fn add_local(&mut self, var_name: String, type_name: String) {
-        if let Some(set) = self.locals.get_mut(&var_name) {
-            set.insert(type_name);
+    pub fn add_local(&mut self, var_name: &str, type_name: &str) {
+        if let Some(set) = self.locals.get_mut(var_name) {
+            set.insert(type_name.to_string());
         }
         else {
             let mut set = FnvHashSet::default();
-            set.insert(type_name);
-            self.locals.insert(var_name, set);
+            set.insert(type_name.to_string());
+            self.locals.insert(var_name.to_string(), set);
         }
     }
 
     pub fn format(&self) -> String { self.event.format() }
+
+    /// Write to filesystem
+    pub fn write(&mut self, return_type: String) {
+        // TODO this method is FULL of copy/paste
+        let exposure_path = Path::new("./.exposure");
+        let formatted = self.format();
+
+        ///////////// First, locals //////////////
+        for (local, types) in &mut self.locals {
+            let filename = format!("{}%{}", formatted, local);
+            let locals_path = exposure_path.join("locals").join(&filename);
+
+            // Merge existing data with ours
+            match read_lines(locals_path.clone()) {
+                Ok(lines) => {
+                    for line in lines {
+                        types.insert(line.expect("Failed to read line from locals file"));
+                    }
+                }
+                _ => {} // Doesn't matter if we can't do it
+            }
+
+            // Write it all back
+            let mut file = File::create(locals_path).expect("Failed to open locals file for write");
+            for typename in types.iter() {
+                let bytes: Vec<u8> = typename.bytes().collect();
+                file.write_all(&bytes).unwrap();
+                file.write_all(b"\n").unwrap();
+            }
+        }
+
+        ///////////// Second, returns ///////////////
+        {
+            let returns_path = exposure_path.join("returns").join(&formatted);
+
+            let mut return_types = FnvHashSet::<String>::default();
+            return_types.insert(return_type);
+
+            // Merge existing data with ours
+            match read_lines(returns_path.clone()) {
+                Ok(lines) => {
+                    for line in lines {
+                        return_types.insert(line.expect("Failed to read line from returns file"));
+                    }
+                }
+                _ => {} // Doesn't matter if we can't do it
+            }
+
+            // Write it all back
+            let mut file = File::create(returns_path).expect("Failed to open returns file for write");
+            for typename in return_types.iter() {
+                let bytes: Vec<u8> = typename.bytes().collect();
+                file.write_all(&bytes).unwrap();
+                file.write_all(b"\n").unwrap();
+            }
+        }
+
+        ///////////// Third, usages ///////////////
+        // TODO this actually seems like it has a high risk of becoming wrong.
+        //      might want to delete entries that share our filename?
+        {
+            match self.event { Event::Class(_) => return, _ => {} }
+            let uses_path = exposure_path.join("uses").join(&formatted);
+
+            let mut uses = FnvHashSet::<String>::default();
+            let my_use = format!("{}:{}", self.caller_file, self.caller_line);
+            uses.insert(my_use);
+
+            // Merge existing data with ours
+            match read_lines(uses_path.clone()) {
+                Ok(lines) => {
+                    for line in lines {
+                        uses.insert(line.expect("Failed to read line from returns file"));
+                    }
+                }
+                _ => {} // Doesn't matter if we can't do it
+            }
+
+            // Write it all back
+            let mut file = File::create(uses_path).expect("Failed to open returns file for write");
+            for usage in uses.iter() {
+                let bytes: Vec<u8> = usage.bytes().collect();
+                file.write_all(&bytes).unwrap();
+                file.write_all(b"\n").unwrap();
+            }
+        }
+    }
+}
+
+fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
+where P: AsRef<Path> {
+    let file = File::open(filename)?;
+    Ok(io::BufReader::new(file).lines())
 }
 
 
@@ -195,6 +299,13 @@ impl EventType {
 #[no_mangle]
 pub extern "C" fn create_trace() -> *const c_void {
     let trace = Box::new(Trace::new());
+
+    // Create necessary directories
+    let exposure_path = Path::new("./.exposure");
+    fs::create_dir_all(exposure_path.join("locals")).expect("Couldn't create locals dir");
+    fs::create_dir_all(exposure_path.join("returns")).expect("Couldn't create returns dir");
+    fs::create_dir_all(exposure_path.join("uses")).expect("Couldn't create uses dir");
+
     Box::into_raw(trace) as *const c_void
 }
 
@@ -263,7 +374,7 @@ pub extern "C" fn add_local(
     let local_var_class = cstr_to_string(type_cstr);
     let local_var_type = Event::sanitized_class_name(&local_var_class).to_string();
 
-    frame.add_local(local_var_name, local_var_type);
+    frame.add_local(&local_var_name, &local_var_type);
 
     Box::leak(trace);
 }
@@ -278,21 +389,12 @@ pub extern "C" fn pop_frame(
     let return_class_name = cstr_to_string(return_type_cstr);
 
     let return_type = Event::sanitized_class_name(&return_class_name);
-    // TODO actually do something with return type
-    match trace.top() {
-        Some(frame) => println!("Popping {} -> {}", frame.format(), return_type),
-        None => println!("Popping {}", return_type)
+    if let Some(frame) = trace.top() {
+        frame.write(return_type.to_string())
     }
 
     trace.pop();
     Box::leak(trace);
-}
-
-
-#[test]
-fn test_crap() {
-    let t1 = create_trace();
-    let t2 = create_trace();
 }
 
 

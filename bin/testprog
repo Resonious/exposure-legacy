@@ -34,7 +34,7 @@ t1 = Test1.new
 t1.go
 
 t2 = Test2.new
-t2.go { t1.go }
+t2.go { t1.go; :ok }
 
 # puts Mush.table_name
 puts Mush.name
