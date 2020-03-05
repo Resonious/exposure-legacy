@@ -7,11 +7,12 @@ use fnv::{FnvHashMap, FnvHashSet};
 
 // use std::thread;
 use std::fmt;
-use std::ffi::CStr;
+use std::ffi::{CStr, OsStr};
 use std::os::raw::{c_char, c_void};
 //use std::sync::mpsc;
-use std::alloc::{alloc, dealloc, Layout};
+use std::boxed::Box;
 use std::borrow::Cow;
+use std::path::Path;
 
 /// Enum corresponding to the tracepoint events we are about
 pub enum EventType {
@@ -38,8 +39,7 @@ impl Event {
         match self {
             Event::Call(class, method) => Event::format_call(class, method),
             Event::Class(name)         => Event::sanitized_class_name(&name).to_string(),
-            // TODO this is not good
-            Event::BCall(file, line)   => format!("{}#{}", file, line)
+            Event::BCall(file, line)   => Event::format_bcall(file, *line)
         }
     }
 
@@ -49,6 +49,21 @@ impl Event {
                 .unwrap();
         }
         GENERATED_ID_REGEX.replace_all(class_name, "(generated)")
+    }
+
+    fn format_bcall(file: &str, line: i32) -> String {
+        let path = Path::new(file);
+
+        let last2: Vec<&OsStr> = path.iter().rev().take(2).collect();
+
+        let mut strings: Vec<String> = last2
+            .iter()
+            .rev()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        strings.push(line.to_string());
+        strings.join(" ")
     }
 
     fn format_call(class: &str, method: &str) -> String {
@@ -116,6 +131,8 @@ impl Frame {
             self.locals.insert(var_name, set);
         }
     }
+
+    pub fn format(&self) -> String { self.event.format() }
 }
 
 
@@ -177,20 +194,15 @@ impl EventType {
 // C-style alloc function. Caller (ruby) should manage this memory!
 #[no_mangle]
 pub extern "C" fn create_trace() -> *const c_void {
-    unsafe {
-        let layout = Layout::new::<Trace>();
-        let ptr = alloc(layout);
-        *(ptr as *mut Trace) = Trace::new();
-        ptr as *const c_void
-    }
+    let trace = Box::new(Trace::new());
+    Box::into_raw(trace) as *const c_void
 }
 
 // C-style dealloc function.
 #[no_mangle]
 pub extern "C" fn destroy_trace(trace_ptr: *mut c_void) {
     unsafe {
-        let layout = Layout::new::<Trace>();
-        dealloc(trace_ptr as *mut u8, layout);
+        let _trace = Box::from_raw(trace_ptr as *mut Trace);
     }
 }
 
@@ -213,7 +225,7 @@ pub extern "C" fn push_frame(
 
     receiver_cstr:   *mut c_char
 ) {
-    let trace: &mut Trace = unsafe { &mut (*(trace_ptr as *mut Trace)) };
+    let mut trace = unsafe { Box::from_raw(trace_ptr as *mut Trace) };
     let event_type = EventType::from_int(event_type_int);
 
     let caller_file = cstr_to_string(caller_file_cstr);
@@ -233,6 +245,8 @@ pub extern "C" fn push_frame(
 
     let frame = Frame::new(event, caller_file, caller_line);
     trace.push(frame);
+
+    Box::leak(trace);
 }
 
 // Add a local to the top frame.
@@ -242,7 +256,7 @@ pub extern "C" fn add_local(
     name_cstr: *mut c_char,
     type_cstr: *mut c_char
 ) {
-    let trace: &mut Trace = unsafe { &mut (*(trace_ptr as *mut Trace)) };
+    let mut trace = unsafe { Box::from_raw(trace_ptr as *mut Trace) };
     let frame = match trace.top() { Some(f) => f, None => return };
 
     let local_var_name = cstr_to_string(name_cstr);
@@ -250,6 +264,8 @@ pub extern "C" fn add_local(
     let local_var_type = Event::sanitized_class_name(&local_var_class).to_string();
 
     frame.add_local(local_var_name, local_var_type);
+
+    Box::leak(trace);
 }
 
 // Just pop the last frame off the stack. Register its return type while you're at it.
@@ -258,13 +274,25 @@ pub extern "C" fn pop_frame(
     trace_ptr: *mut c_void,
     return_type_cstr: *mut c_char,
 ) {
-    let trace: &mut Trace = unsafe { &mut (*(trace_ptr as *mut Trace)) };
+    let mut trace = unsafe { Box::from_raw(trace_ptr as *mut Trace) };
     let return_class_name = cstr_to_string(return_type_cstr);
+
     let return_type = Event::sanitized_class_name(&return_class_name);
     // TODO actually do something with return type
-    println!("Popping {}", return_type);
+    match trace.top() {
+        Some(frame) => println!("Popping {} -> {}", frame.format(), return_type),
+        None => println!("Popping {}", return_type)
+    }
 
     trace.pop();
+    Box::leak(trace);
+}
+
+
+#[test]
+fn test_crap() {
+    let t1 = create_trace();
+    let t2 = create_trace();
 }
 
 

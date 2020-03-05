@@ -24,8 +24,9 @@ class Test2
   say_hi
 end
 
-class Mush < ActiveRecord::Base
+class Mush # < ActiveRecord::Base
   def self.whatever
+    Mush.new
   end
 end
 
@@ -35,7 +36,7 @@ t1.go
 t2 = Test2.new
 t2.go { t1.go }
 
-puts Mush.table_name
+# puts Mush.table_name
 puts Mush.name
 puts Mush.to_s
 puts Mush.inspect

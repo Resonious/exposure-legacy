@@ -21,7 +21,7 @@ module Exposure
 
     def push(trace)
       calla = caller_locations(2..2).first
-      receiver = trace.binding.receiver
+      receiver = trace.binding.receiver if trace.binding.receiver.is_a?(Class)
       klass = trace.defined_class
 
       # First push
@@ -36,31 +36,37 @@ module Exposure
         trace.path,
         trace.lineno,
 
-        klass.name || klass.to_s,
-        trace.method_id,
+        (klass.name || klass.to_s if klass),
+        trace.method_id.to_s,
 
-        receiver.name || receiver.to_s
+        (receiver.name || receiver.to_s if receiver)
       )
 
       # Then add locals
-      trace.binding.local_variables.each do |var|
-        begin
-          val = trace.binding.local_variable_get(var)
-          Core.add_local(@core, var, val.class.name || val.class.to_s)
-        rescue StandardError => e
-          Core.add_local(@core, var, "((#{e.class} during inspect))")
-        end
-      end
+      add_locals(trace.binding)
     end
 
     def pop(trace)
-      if %i[return b_return].include?(trace.event)
-        return_type = Frame.sanitized_class_name(trace.return_value.class.name)
-      else
-        return_type = ''
+      if trace.event == :return || trace.event == :b_return
+        return_class = trace.return_value.class
+        return_type = return_class.name || return_class.to_s
       end
 
+      add_locals(trace.binding)
       Core.pop_frame(@core, return_type)
+    end
+
+    private
+
+    def add_locals(frame_binding)
+      frame_binding.local_variables.each do |var|
+        begin
+          val = frame_binding.local_variable_get(var)
+          Core.add_local(@core, var.to_s, val.class.name || val.class.to_s)
+        rescue StandardError => e
+          Core.add_local(@core, var.to_s, "((#{e.class} during inspect))")
+        end
+      end
     end
   end
 end
