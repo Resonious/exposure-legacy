@@ -4,7 +4,7 @@ module Exposure
   # The FFI interface
   module Core
     extend FFI::Library
-    ffi_lib 'core/target/debug/libexposure.so'
+    ffi_lib File.join(__dir__, '../../', 'core/target/debug/libexposure.so')
 
     attach_function :create_trace, [], :pointer
     attach_function :destroy_trace, [:pointer], :void
