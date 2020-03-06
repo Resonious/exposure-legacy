@@ -12,7 +12,8 @@ use std::os::raw::{c_char, c_void};
 //use std::sync::mpsc;
 use std::boxed::Box;
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::env;
 use std::fs::File;
 use std::fs;
 use std::io::{self, BufRead};
@@ -52,12 +53,12 @@ impl Event {
             static ref GENERATED_ID_REGEX: Regex = Regex::new(":0x[\\dA-Fa-f]{16}")
                 .unwrap();
         }
-        let result = GENERATED_ID_REGEX.replace_all(class_name, "(generated)");
+        let result = GENERATED_ID_REGEX.replace_all(class_name, ":(generated)");
         let result_str: &str = &result;
 
         match result_str {
             "NilClass"                 => Cow::from("nil"),
-            "FalseClass" | "TrueClass" => Cow::from("bool"),
+            "FalseClass" | "TrueClass" => Cow::from("Boolean"),
             _                          => result
         }
     }
@@ -101,7 +102,7 @@ fn test_format_class() {
     assert_eq!(event.format(), "Regular::Ruby::Class");
 
     let event = Event::Class("#<Some::SingletonClass:0xF2F5EAB2B2D35910>".to_string());
-    assert_eq!(event.format(), "#<Some::SingletonClass(generated)>");
+    assert_eq!(event.format(), "#<Some::SingletonClass:(generated)>");
 }
 
 #[test]
@@ -146,9 +147,9 @@ impl Frame {
     pub fn format(&self) -> String { self.event.format() }
 
     /// Write to filesystem
-    pub fn write(&mut self, return_type: String) {
+    pub fn write(&mut self, cwd: PathBuf, return_type: String) {
         // TODO this method is FULL of copy/paste
-        let exposure_path = Path::new("./.exposure");
+        let exposure_path = cwd.join(".exposure");
         let formatted = self.format();
 
         ///////////// First, locals //////////////
@@ -176,7 +177,7 @@ impl Frame {
         }
 
         ///////////// Second, returns ///////////////
-        {
+        if !return_type.is_empty() {
             let returns_path = exposure_path.join("returns").join(&formatted);
 
             let mut return_types = FnvHashSet::<String>::default();
@@ -242,13 +243,15 @@ where P: AsRef<Path> {
 
 /// A single call stack trace.
 pub struct Trace {
-    frames: Vec<Frame>
+    frames: Vec<Frame>,
+    cwd: PathBuf
 }
 
 impl Trace {
     pub fn new() -> Trace {
         Trace {
-            frames: vec![]
+            frames: vec![],
+            cwd: env::current_dir().expect("Could not read CWD")
         }
     }
 
@@ -262,6 +265,10 @@ impl Trace {
 
     pub fn top(&mut self) -> Option<&mut Frame> {
         self.frames.last_mut()
+    }
+
+    pub fn current_dir(&self) -> PathBuf {
+        self.cwd.clone()
     }
 }
 
@@ -301,7 +308,7 @@ pub extern "C" fn create_trace() -> *const c_void {
     let trace = Box::new(Trace::new());
 
     // Create necessary directories
-    let exposure_path = Path::new("./.exposure");
+    let exposure_path = trace.current_dir().join(".exposure");
     fs::create_dir_all(exposure_path.join("locals")).expect("Couldn't create locals dir");
     fs::create_dir_all(exposure_path.join("returns")).expect("Couldn't create returns dir");
     fs::create_dir_all(exposure_path.join("uses")).expect("Couldn't create uses dir");
@@ -336,7 +343,7 @@ pub extern "C" fn push_frame(
 
     receiver_cstr:   *mut c_char
 ) {
-    let mut trace = unsafe { Box::from_raw(trace_ptr as *mut Trace) };
+    let trace = unsafe { Box::leak(Box::from_raw(trace_ptr as *mut Trace)) };
     let event_type = EventType::from_int(event_type_int);
 
     let caller_file = cstr_to_string(caller_file_cstr);
@@ -356,8 +363,6 @@ pub extern "C" fn push_frame(
 
     let frame = Frame::new(event, caller_file, caller_line);
     trace.push(frame);
-
-    Box::leak(trace);
 }
 
 // Add a local to the top frame.
@@ -367,7 +372,7 @@ pub extern "C" fn add_local(
     name_cstr: *mut c_char,
     type_cstr: *mut c_char
 ) {
-    let mut trace = unsafe { Box::from_raw(trace_ptr as *mut Trace) };
+    let trace = unsafe { Box::leak(Box::from_raw(trace_ptr as *mut Trace)) };
     let frame = match trace.top() { Some(f) => f, None => return };
 
     let local_var_name = cstr_to_string(name_cstr);
@@ -375,8 +380,6 @@ pub extern "C" fn add_local(
     let local_var_type = Event::sanitized_class_name(&local_var_class).to_string();
 
     frame.add_local(&local_var_name, &local_var_type);
-
-    Box::leak(trace);
 }
 
 // Just pop the last frame off the stack. Register its return type while you're at it.
@@ -385,16 +388,16 @@ pub extern "C" fn pop_frame(
     trace_ptr: *mut c_void,
     return_type_cstr: *mut c_char,
 ) {
-    let mut trace = unsafe { Box::from_raw(trace_ptr as *mut Trace) };
+    let trace = unsafe { Box::leak(Box::from_raw(trace_ptr as *mut Trace)) };
+    let cwd = trace.current_dir();
     let return_class_name = cstr_to_string(return_type_cstr);
 
     let return_type = Event::sanitized_class_name(&return_class_name);
     if let Some(frame) = trace.top() {
-        frame.write(return_type.to_string())
+        frame.write(cwd, return_type.to_string())
     }
 
     trace.pop();
-    Box::leak(trace);
 }
 
 

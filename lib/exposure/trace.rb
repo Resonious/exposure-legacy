@@ -7,8 +7,8 @@ module Exposure
       @core = Core.new_trace
 
       @trace_points = []
-      @trace_points << TracePoint.new(:b_call, :class, :call, &method(:push))
-      @trace_points << TracePoint.new(:return, :b_return, :end, &method(:pop))
+      @trace_points << TracePoint.new(:class, :call, &method(:push))
+      @trace_points << TracePoint.new(:return, :end, &method(:pop))
     end
 
     def start
@@ -21,7 +21,7 @@ module Exposure
 
     def push(trace)
       calla = caller_locations(2..2).first
-      receiver = trace.binding.receiver if trace.binding.receiver.is_a?(Class)
+      receiver = (trace.binding.receiver if trace.binding.receiver.is_a?(Class)) rescue nil
       klass = trace.defined_class
 
       # First push
