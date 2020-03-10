@@ -2,6 +2,7 @@
 
 require 'bundler/setup'
 require 'exposure'
+require 'active_record'
 Thread.current[:trace] = Exposure::Trace.new
 Thread.current[:trace].start
 
@@ -24,7 +25,7 @@ class Test2
   say_hi
 end
 
-class Mush # < ActiveRecord::Base
+class Mush < ActiveRecord::Base
   def self.whatever
     Mush.new
   end
@@ -36,7 +37,7 @@ t1.go
 t2 = Test2.new
 t2.go { t1.go; :ok }
 
-# puts Mush.table_name
+puts Mush.table_name
 puts Mush.name
 puts Mush.to_s
 puts Mush.inspect

@@ -218,7 +218,7 @@ impl Frame {
         ///////////// Third, usages ///////////////
         // TODO this actually seems like it has a high risk of becoming wrong.
         //      might want to delete entries that share our filename?
-        if false {
+        if false { // TODO re-activate this
             match self.event { Event::Class(_) => return, _ => {} }
             let uses_path = exposure_path.join("uses").join(&formatted);
 
@@ -258,31 +258,42 @@ where P: AsRef<Path> {
 pub struct Trace {
     frames: Vec<Frame>,
     cwd: PathBuf,
-    writer: mpsc::Sender<Option<Frame>>,
-    writer_thread: JoinHandle<()>
+    // TODO I could use https://docs.rs/rayon/1.3.0/rayon
+    // instead of this round-robin strategy.
+    writers: Vec<mpsc::Sender<Option<Frame>>>,
+    writer_threads: Vec<JoinHandle<()>>,
+    writer_i: usize
 }
 
 impl Trace {
     pub fn new() -> Trace {
-        let (tx, rx): (mpsc::Sender<Option<Frame>>, _) = mpsc::channel();
-
         let cwd = env::current_dir().expect("Could not read CWD");
-        let thread_cwd = cwd.clone();
 
-        let join_handle = thread::spawn(move || {
-            loop {
-                match rx.recv() {
-                    Ok(Some(mut frame)) => frame.write(thread_cwd.clone()),
-                    _ => break
-                }
-            };
-        });
+        let mut senders = Vec::new();
+        let mut join_handles = Vec::new();
+
+        // TODO https://docs.rs/num_cpus/1.12.0/num_cpus
+        for _ in 1..8 {
+            let (tx, rx): (mpsc::Sender<Option<Frame>>, _) = mpsc::channel();
+            let thread_cwd = cwd.clone();
+            let join_handle = thread::spawn(move || {
+                loop {
+                    match rx.recv() {
+                        Ok(Some(mut frame)) => frame.write(thread_cwd.clone()),
+                        _ => break
+                    }
+                };
+            });
+            senders.push(tx);
+            join_handles.push(join_handle);
+        }
 
         Trace {
             frames: vec![],
             cwd: cwd,
-            writer: tx,
-            writer_thread: join_handle
+            writers: senders,
+            writer_threads: join_handles,
+            writer_i: 0
         }
     }
 
@@ -298,7 +309,8 @@ impl Trace {
         match self.frames.pop() {
             Some(mut frame) => {
                 frame.set_return_type(return_type);
-                self.writer.send(Some(frame)).expect("Writer thread died somehow");
+                self.writers[self.writer_i].send(Some(frame)).expect("Writer thread died somehow");
+                self.writer_i = (self.writer_i + 1) % self.writers.len();
             }
             _ => return
         };
@@ -313,8 +325,12 @@ impl Trace {
     }
 
     pub fn finish(self) {
-        self.writer.send(None).expect("Couldn't tell writer thread to stop");
-        self.writer_thread.join().expect("Writer panicked at some point");
+        for writer in self.writers {
+            writer.send(None).expect("Couldn't tell writer thread to stop");
+        }
+        for writer_thread in self.writer_threads {
+            writer_thread.join().expect("Writer panicked at some point");
+        }
     }
 }
 

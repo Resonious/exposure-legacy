@@ -3,7 +3,7 @@
 module Exposure
   # Light wrapper around the Core Trace
   class Trace
-    def initialize
+    def initialize(path_whitelist: //)
       @core = Core.new_trace
 
       @trace_points = []
@@ -12,6 +12,9 @@ module Exposure
 
       @class_name = Class.method(:name).unbind
       @module_name = Module.method(:name).unbind
+      @is_a = Object.instance_method(:is_a?)
+
+      @path_whitelist = path_whitelist
     end
 
     def name_of(klass)
@@ -30,8 +33,13 @@ module Exposure
     end
 
     def push(trace)
+      # puts "#{ident_up} push #{trace.path}"
+      return unless trace.path =~ @path_whitelist
+
       calla = caller_locations(2..2).first
-      receiver = (trace.binding.receiver if trace.binding.receiver.is_a?(Class)) rescue nil
+      if @is_a.bind(trace.binding.receiver).call(Class)
+        receiver = trace.binding.receiver
+      end
       klass = trace.defined_class
 
       # First push
@@ -57,6 +65,9 @@ module Exposure
     end
 
     def pop(trace)
+      # puts "#{ident_down} pop #{trace.path}"
+      return unless trace.path =~ @path_whitelist
+
       if trace.event == :return || trace.event == :b_return
         return_class = trace.return_value.class
         return_type = name_of(return_class)
@@ -67,6 +78,26 @@ module Exposure
     end
 
     private
+
+    def ident
+      @ident ||= 0
+      ' ' * @ident
+    end
+
+    def ident_up
+      @ident ||= 0
+      @ident += 1
+      ident
+    end
+
+    def ident_down
+      @ident ||= 0
+      result = ident
+      @ident -= 1
+      raise 'IDENT WENT NEGATIVE' if @ident.negative?
+
+      result
+    end
 
     def add_locals(frame_binding)
       frame_binding.local_variables.each do |var|
