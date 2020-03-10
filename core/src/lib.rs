@@ -5,11 +5,11 @@ extern crate regex;
 use regex::Regex;
 use fnv::{FnvHashMap, FnvHashSet};
 
-// use std::thread;
+use std::thread::{self, JoinHandle};
 use std::fmt;
 use std::ffi::{CStr, OsStr};
 use std::os::raw::{c_char, c_void};
-//use std::sync::mpsc;
+use std::sync::mpsc;
 use std::boxed::Box;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -118,7 +118,8 @@ pub struct Frame {
     event: Event,
     caller_file: String,
     caller_line: i32,
-    locals: FnvHashMap<String, FnvHashSet<String>>
+    locals: FnvHashMap<String, FnvHashSet<String>>,
+    return_type: String
 }
 
 impl Frame {
@@ -128,6 +129,7 @@ impl Frame {
             caller_file: caller_file,
             caller_line: caller_line,
             locals: FnvHashMap::default(),
+            return_type: String::new()
         }
     }
 
@@ -144,10 +146,14 @@ impl Frame {
         }
     }
 
+    pub fn set_return_type(&mut self, value: String) {
+        self.return_type = value;
+    }
+
     pub fn format(&self) -> String { self.event.format() }
 
     /// Write to filesystem
-    pub fn write(&mut self, cwd: PathBuf, return_type: String) {
+    pub fn write(&mut self, cwd: PathBuf) {
         // TODO this method is FULL of copy/paste
         let exposure_path = cwd.join(".exposure");
         let formatted = self.format();
@@ -156,6 +162,7 @@ impl Frame {
         for (local, types) in &mut self.locals {
             let filename = format!("{}%{}", formatted, local);
             let locals_path = exposure_path.join("locals").join(&filename);
+            let original_len = types.len();
 
             // Merge existing data with ours
             match read_lines(locals_path.clone()) {
@@ -167,6 +174,9 @@ impl Frame {
                 _ => {} // Doesn't matter if we can't do it
             }
 
+            // Duck out if nothing changed
+            if types.len() == original_len { continue }
+
             // Write it all back
             let mut file = File::create(locals_path).expect("Failed to open locals file for write");
             for typename in types.iter() {
@@ -177,11 +187,11 @@ impl Frame {
         }
 
         ///////////// Second, returns ///////////////
-        if !return_type.is_empty() {
+        if !self.return_type.is_empty() {
             let returns_path = exposure_path.join("returns").join(&formatted);
 
             let mut return_types = FnvHashSet::<String>::default();
-            return_types.insert(return_type);
+            return_types.insert(self.return_type.clone());
 
             // Merge existing data with ours
             match read_lines(returns_path.clone()) {
@@ -193,19 +203,22 @@ impl Frame {
                 _ => {} // Doesn't matter if we can't do it
             }
 
-            // Write it all back
-            let mut file = File::create(returns_path).expect("Failed to open returns file for write");
-            for typename in return_types.iter() {
-                let bytes: Vec<u8> = typename.bytes().collect();
-                file.write_all(&bytes).unwrap();
-                file.write_all(b"\n").unwrap();
+            // Duck out if nothing changed
+            if return_types.len() != 1 {
+                // Write it all back
+                let mut file = File::create(returns_path).expect("Failed to open returns file for write");
+                for typename in return_types.iter() {
+                    let bytes: Vec<u8> = typename.bytes().collect();
+                    file.write_all(&bytes).unwrap();
+                    file.write_all(b"\n").unwrap();
+                }
             }
         }
 
         ///////////// Third, usages ///////////////
         // TODO this actually seems like it has a high risk of becoming wrong.
         //      might want to delete entries that share our filename?
-        {
+        if false {
             match self.event { Event::Class(_) => return, _ => {} }
             let uses_path = exposure_path.join("uses").join(&formatted);
 
@@ -244,14 +257,32 @@ where P: AsRef<Path> {
 /// A single call stack trace.
 pub struct Trace {
     frames: Vec<Frame>,
-    cwd: PathBuf
+    cwd: PathBuf,
+    writer: mpsc::Sender<Option<Frame>>,
+    writer_thread: JoinHandle<()>
 }
 
 impl Trace {
     pub fn new() -> Trace {
+        let (tx, rx): (mpsc::Sender<Option<Frame>>, _) = mpsc::channel();
+
+        let cwd = env::current_dir().expect("Could not read CWD");
+        let thread_cwd = cwd.clone();
+
+        let join_handle = thread::spawn(move || {
+            loop {
+                match rx.recv() {
+                    Ok(Some(mut frame)) => frame.write(thread_cwd.clone()),
+                    _ => break
+                }
+            };
+        });
+
         Trace {
             frames: vec![],
-            cwd: env::current_dir().expect("Could not read CWD")
+            cwd: cwd,
+            writer: tx,
+            writer_thread: join_handle
         }
     }
 
@@ -259,8 +290,18 @@ impl Trace {
         self.frames.push(frame);
     }
 
-    pub fn pop(&mut self) {
-        self.frames.pop();
+    pub fn pop(&mut self) -> Option<Frame> {
+        self.frames.pop()
+    }
+
+    pub fn pop_and_write(&mut self, return_type: String) {
+        match self.frames.pop() {
+            Some(mut frame) => {
+                frame.set_return_type(return_type);
+                self.writer.send(Some(frame)).expect("Writer thread died somehow");
+            }
+            _ => return
+        };
     }
 
     pub fn top(&mut self) -> Option<&mut Frame> {
@@ -269,6 +310,11 @@ impl Trace {
 
     pub fn current_dir(&self) -> PathBuf {
         self.cwd.clone()
+    }
+
+    pub fn finish(self) {
+        self.writer.send(None).expect("Couldn't tell writer thread to stop");
+        self.writer_thread.join().expect("Writer panicked at some point");
     }
 }
 
@@ -320,7 +366,8 @@ pub extern "C" fn create_trace() -> *const c_void {
 #[no_mangle]
 pub extern "C" fn destroy_trace(trace_ptr: *mut c_void) {
     unsafe {
-        let _trace = Box::from_raw(trace_ptr as *mut Trace);
+        let trace = Box::from_raw(trace_ptr as *mut Trace);
+        trace.finish();
     }
 }
 
@@ -389,15 +436,10 @@ pub extern "C" fn pop_frame(
     return_type_cstr: *mut c_char,
 ) {
     let trace = unsafe { Box::leak(Box::from_raw(trace_ptr as *mut Trace)) };
-    let cwd = trace.current_dir();
     let return_class_name = cstr_to_string(return_type_cstr);
 
     let return_type = Event::sanitized_class_name(&return_class_name);
-    if let Some(frame) = trace.top() {
-        frame.write(cwd, return_type.to_string())
-    }
-
-    trace.pop();
+    trace.pop_and_write(return_type.into_owned());
 }
 
 

@@ -9,6 +9,16 @@ module Exposure
       @trace_points = []
       @trace_points << TracePoint.new(:class, :call, &method(:push))
       @trace_points << TracePoint.new(:return, :end, &method(:pop))
+
+      @class_name = Class.method(:name).unbind
+      @module_name = Module.method(:name).unbind
+    end
+
+    def name_of(klass)
+      case klass
+      when Class then @class_name.bind(klass).call
+      when Module then @module_name.bind(klass).call
+      end
     end
 
     def start
@@ -36,10 +46,10 @@ module Exposure
         trace.path,
         trace.lineno,
 
-        (klass.name || klass.to_s if klass),
+        name_of(klass),
         trace.method_id.to_s,
 
-        (receiver.name || receiver.to_s if receiver)
+        name_of(receiver)
       )
 
       # Then add locals
@@ -49,7 +59,7 @@ module Exposure
     def pop(trace)
       if trace.event == :return || trace.event == :b_return
         return_class = trace.return_value.class
-        return_type = return_class.name || return_class.to_s
+        return_type = name_of(return_class)
       end
 
       add_locals(trace.binding)
@@ -62,7 +72,7 @@ module Exposure
       frame_binding.local_variables.each do |var|
         begin
           val = frame_binding.local_variable_get(var)
-          Core.add_local(@core, var.to_s, val.class.name || val.class.to_s)
+          Core.add_local(@core, var.to_s, name_of(val.class))
         rescue StandardError => e
           Core.add_local(@core, var.to_s, "((#{e.class} during inspect))")
         end
