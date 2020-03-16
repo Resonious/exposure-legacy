@@ -10,8 +10,8 @@ module Exposure
       @trace_points << TracePoint.new(:class, :call, &method(:push))
       @trace_points << TracePoint.new(:return, :end, &method(:pop))
 
-      @class_name = Class.method(:name).unbind
-      @module_name = Module.method(:name).unbind
+      @class_name = Class.method(:to_s).unbind
+      @module_name = Module.method(:to_s).unbind
       @is_a = Object.instance_method(:is_a?)
 
       @path_whitelist = path_whitelist
@@ -41,13 +41,8 @@ module Exposure
         receiver = trace.binding.receiver
       end
 
-      if trace.method_id
-        # TODO I'm not sure how exactly this works with class methods. is the
-        # defined_class the singleton class? probably not.
-        klass = trace.defined_class.instance_method(trace.method_id).owner
-      else
-        klass = trace.defined_class
-      end
+      klass = trace.defined_class
+      klass = klass.instance_method(trace.method_id).owner if trace.method_id
 
       # First push
       Core.push_frame(

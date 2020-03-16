@@ -412,6 +412,7 @@ pub extern "C" fn push_frame(
     let trace = unsafe { Box::leak(Box::from_raw(trace_ptr as *mut Trace)) };
     let event_type = EventType::from_int(event_type_int);
 
+    // TODO I don't have to stringify all of these here. Can do it on use.
     let caller_file = cstr_to_string(caller_file_cstr);
     let trace_file = cstr_to_string(trace_file_cstr);
     let class_name = cstr_to_string(class_name_cstr);
