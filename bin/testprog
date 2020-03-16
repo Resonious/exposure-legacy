@@ -42,7 +42,7 @@ puts Mush.name
 puts Mush.to_s
 puts Mush.inspect
 
-Test2.say_hi Test2.say_hi Mush.whatever
+Test2.say_hi Test2.say_hi 'hi'
 
 
 Thread.current[:trace].stop

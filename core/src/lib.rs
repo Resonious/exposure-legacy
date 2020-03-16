@@ -162,20 +162,21 @@ impl Frame {
         for (local, types) in &mut self.locals {
             let filename = format!("{}%{}", formatted, local);
             let locals_path = exposure_path.join("locals").join(&filename);
-            let original_len = types.len();
+            let mut types_in_file = 0;
 
             // Merge existing data with ours
             match read_lines(locals_path.clone()) {
                 Ok(lines) => {
                     for line in lines {
                         types.insert(line.expect("Failed to read line from locals file"));
+                        types_in_file += 1;
                     }
                 }
                 _ => {} // Doesn't matter if we can't do it
             }
 
             // Duck out if nothing changed
-            if types.len() == original_len { continue }
+            if types.len() == types_in_file { continue }
 
             // Write it all back
             let mut file = File::create(locals_path).expect("Failed to open locals file for write");
@@ -192,19 +193,21 @@ impl Frame {
 
             let mut return_types = FnvHashSet::<String>::default();
             return_types.insert(self.return_type.clone());
+            let mut return_types_in_file = 0;
 
             // Merge existing data with ours
             match read_lines(returns_path.clone()) {
                 Ok(lines) => {
                     for line in lines {
                         return_types.insert(line.expect("Failed to read line from returns file"));
+                        return_types_in_file += 1;
                     }
                 }
                 _ => {} // Doesn't matter if we can't do it
             }
 
             // Duck out if nothing changed
-            if return_types.len() != 1 {
+            if return_types.len() != return_types_in_file {
                 // Write it all back
                 let mut file = File::create(returns_path).expect("Failed to open returns file for write");
                 for typename in return_types.iter() {
@@ -218,7 +221,7 @@ impl Frame {
         ///////////// Third, usages ///////////////
         // TODO this actually seems like it has a high risk of becoming wrong.
         //      might want to delete entries that share our filename?
-        if false { // TODO re-activate this
+        {
             match self.event { Event::Class(_) => return, _ => {} }
             let uses_path = exposure_path.join("uses").join(&formatted);
 
