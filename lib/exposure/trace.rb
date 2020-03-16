@@ -40,7 +40,14 @@ module Exposure
       if @is_a.bind(trace.binding.receiver).call(Class)
         receiver = trace.binding.receiver
       end
-      klass = trace.defined_class
+
+      if trace.method_id
+        # TODO I'm not sure how exactly this works with class methods. is the
+        # defined_class the singleton class? probably not.
+        klass = trace.defined_class.instance_method(trace.method_id).owner
+      else
+        klass = trace.defined_class
+      end
 
       # First push
       Core.push_frame(
