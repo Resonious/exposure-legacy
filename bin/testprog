@@ -29,6 +29,10 @@ class Mush < ActiveRecord::Base
   def self.whatever
     Mush.new
   end
+
+  def doit
+    puts 'whoa'
+  end
 end
 
 t1 = Test1.new

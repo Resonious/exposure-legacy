@@ -4,14 +4,12 @@ module Exposure
   # Light wrapper around the Core Trace
   class Trace
     def initialize(path_whitelist: //)
-      @core = Core.new_trace
-
       @trace_points = []
       @trace_points << TracePoint.new(:class, :call, &method(:push))
       @trace_points << TracePoint.new(:return, :end, &method(:pop))
 
-      @class_name = Class.method(:to_s).unbind
-      @module_name = Module.method(:to_s).unbind
+      @class_name = Class.instance_method(:to_s)
+      @module_name = Module.instance_method(:to_s)
       @is_a = Object.instance_method(:is_a?)
 
       @path_whitelist = path_whitelist
@@ -22,18 +20,22 @@ module Exposure
       when Class then @class_name.bind(klass).call
       when Module then @module_name.bind(klass).call
       end
+    rescue
+      "(Broken)"
     end
 
     def start
+      @core = Core.new_trace
       @trace_points.each(&:enable)
     end
 
     def stop
       @trace_points.each(&:disable)
+      @core = nil
     end
 
     def push(trace)
-      # puts "#{ident_up} push #{trace.path}"
+      # puts "#{indent_up} push #{trace.path}"
       return unless trace.path =~ @path_whitelist
 
       calla = caller_locations(2..2).first
@@ -42,9 +44,12 @@ module Exposure
       end
 
       klass = trace.defined_class
-      klass = klass.instance_method(trace.method_id).owner if trace.method_id
+      begin
+        klass = klass.instance_method(trace.method_id).owner if trace.method_id
+      rescue NameError
+      end
 
-      # First push
+      # First, push
       Core.push_frame(
         @core,
 
@@ -62,12 +67,12 @@ module Exposure
         name_of(receiver)
       )
 
-      # Then add locals
+      # Then, add locals
       add_locals(trace.binding)
     end
 
     def pop(trace)
-      # puts "#{ident_down} pop #{trace.path}"
+      # puts "#{indent_down} pop #{trace.path}"
       return unless trace.path =~ @path_whitelist
 
       if trace.event == :return || trace.event == :b_return
@@ -81,22 +86,22 @@ module Exposure
 
     private
 
-    def ident
-      @ident ||= 0
-      ' ' * @ident
+    def indent
+      @indent ||= 0
+      ' ' * @indent
     end
 
-    def ident_up
-      @ident ||= 0
-      @ident += 1
-      ident
+    def indent_up
+      @indent ||= 0
+      @indent += 1
+      indent
     end
 
-    def ident_down
-      @ident ||= 0
-      result = ident
-      @ident -= 1
-      raise 'IDENT WENT NEGATIVE' if @ident.negative?
+    def indent_down
+      @indent ||= 0
+      result = indent
+      @indent -= 1
+      raise 'IDENT WENT NEGATIVE' if @indent.negative?
 
       result
     end

@@ -1,9 +1,11 @@
 #[macro_use]
 extern crate lazy_static;
 extern crate regex;
+extern crate pathdiff;
 
 use regex::Regex;
 use fnv::{FnvHashMap, FnvHashSet};
+use pathdiff::diff_paths;
 
 use std::thread::{self, JoinHandle};
 use std::fmt;
@@ -221,19 +223,29 @@ impl Frame {
         ///////////// Third, usages ///////////////
         // TODO this actually seems like it has a high risk of becoming wrong.
         //      might want to delete entries that share our filename?
+        //      (TODO COMPLICATED 'CAUSE SAME RUN WILL OVERWRITE ITSELF)
         {
             match self.event { Event::Class(_) => return, _ => {} }
             let uses_path = exposure_path.join("uses").join(&formatted);
 
             let mut uses = FnvHashSet::<String>::default();
-            let my_use = format!("{}:{}", self.caller_file, self.caller_line);
+            let relative_caller_file = match relative_to_workspace(&self.caller_file) {
+                Some(path) => path.to_string_lossy().to_string(),
+                None => self.caller_file.clone()
+            };
+            let my_use = format!(
+                "{}:{}",
+                relative_caller_file,
+                self.caller_line
+            );
             uses.insert(my_use);
 
             // Merge existing data with ours
             match read_lines(uses_path.clone()) {
                 Ok(lines) => {
                     for line in lines {
-                        uses.insert(line.expect("Failed to read line from returns file"));
+                        let line = line.expect("Failed to read line from returns file");
+                        uses.insert(line);
                     }
                 }
                 _ => {} // Doesn't matter if we can't do it
@@ -275,8 +287,7 @@ impl Trace {
         let mut senders = Vec::new();
         let mut join_handles = Vec::new();
 
-        // TODO https://docs.rs/num_cpus/1.12.0/num_cpus
-        for _ in 1..8 {
+        for _ in 1..num_cpus::get() {
             let (tx, rx): (mpsc::Sender<Option<Frame>>, _) = mpsc::channel();
             let thread_cwd = cwd.clone();
             let join_handle = thread::spawn(move || {
@@ -460,6 +471,13 @@ pub extern "C" fn pop_frame(
 
     let return_type = Event::sanitized_class_name(&return_class_name);
     trace.pop_and_write(return_type.into_owned());
+}
+
+
+fn relative_to_workspace(full_path: &str) -> Option<PathBuf> {
+    let base = env::current_dir().expect("Could not read CWD");
+    let file: PathBuf = full_path.into();
+    diff_paths(&file, &base)
 }
 
 
