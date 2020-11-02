@@ -3,7 +3,7 @@
 require 'bundler/setup'
 require 'exposure'
 require 'active_record'
-Thread.current[:trace] = Exposure::Trace.new
+Thread.current[:trace] = Exposure::Trace.new(path_whitelist: /testprog$/)
 Thread.current[:trace].start
 
 class Test1
@@ -25,14 +25,34 @@ class Test2
   say_hi
 end
 
-class Mush < ActiveRecord::Base
+class Mush
   def self.whatever
+    @classvar = 'huh'
     Mush.new
   end
 
   def doit
+    @instvar ||= 0
+    @instvar += 1
     puts 'whoa'
   end
+
+  def value
+    @instvar
+  end
+end
+
+module DefineMethodMutator
+  def define_method(*args, &block)
+    puts "DEFINING #{args.inspect} (#{block.arity})"
+    super
+  end
+end
+
+Class.prepend DefineMethodMutator
+
+Mush.define_method(:ass) do
+  'wohooo!'
 end
 
 t1 = Test1.new
@@ -41,10 +61,15 @@ t1.go
 t2 = Test2.new
 t2.go { t1.go; :ok }
 
-puts Mush.table_name
-puts Mush.name
-puts Mush.to_s
-puts Mush.inspect
+# puts Mush.table_name
+# puts Mush.name
+# puts Mush.to_s
+# puts Mush.inspect
+
+m = Mush.whatever
+m.doit
+puts m.value
+puts m.ass
 
 Test2.say_hi Test2.say_hi 'hi'
 

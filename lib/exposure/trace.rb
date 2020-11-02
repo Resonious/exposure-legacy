@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+require 'pry'
 
 module Exposure
   # Light wrapper around the Core Trace
@@ -36,7 +37,8 @@ module Exposure
 
     def push(trace)
       # puts "#{indent_up} push #{trace.path}"
-      return unless trace.path =~ @path_whitelist
+      analyze_define_method(trace) if trace.method_id == :define_method
+      return unless @path_whitelist.match?(trace.path)
 
       calla = caller_locations(2..2).first
       if @is_a.bind(trace.binding.receiver).call(Class)
@@ -73,7 +75,7 @@ module Exposure
 
     def pop(trace)
       # puts "#{indent_down} pop #{trace.path}"
-      return unless trace.path =~ @path_whitelist
+      return unless @path_whitelist.match?(trace.path)
 
       if trace.event == :return || trace.event == :b_return
         return_class = trace.return_value.class
@@ -115,6 +117,10 @@ module Exposure
           Core.add_local(@core, var.to_s, "((#{e.class} during inspect))")
         end
       end
+    end
+
+    def analyze_define_method(trace)
+      binding.pry
     end
   end
 end
